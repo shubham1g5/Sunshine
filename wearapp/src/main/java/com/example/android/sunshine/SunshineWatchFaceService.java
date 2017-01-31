@@ -42,7 +42,12 @@ import android.widget.Toast;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.wearable.DataApi;
+import com.google.android.gms.wearable.DataEvent;
 import com.google.android.gms.wearable.DataEventBuffer;
+import com.google.android.gms.wearable.DataItem;
+import com.google.android.gms.wearable.DataMap;
+import com.google.android.gms.wearable.DataMapItem;
+import com.google.android.gms.wearable.Wearable;
 
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
@@ -55,9 +60,19 @@ import java.util.concurrent.TimeUnit;
  * Digital watch face with seconds. In ambient mode, the seconds aren't displayed. On devices with
  * low-bit ambient mode, the text is drawn without anti-aliasing in ambient mode.
  */
-public class SunshineWatchFaceService extends CanvasWatchFaceService {
+// TODO: 31/1/17 Code cleanup
+// TODO: 31/1/17 Data Integration
+public class SunshineWatchFaceService extends CanvasWatchFaceService implements DataApi.DataListener,
+        GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
     private static final Typeface NORMAL_TYPEFACE =
             Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
+
+
+    private static final String WEATHER_ITEM_PATH = "/weather";
+    private static final String HIGH_KEY = "com.example.android.sunshine.high";
+    private static final String LOW_KEY = "com.example.android.sunshine.low";
+    private static final String CONDITION_KEY = "com.example.android.sunshine.condition";
 
     /**
      * Update rate in milliseconds for interactive mode. We update once a second since seconds are
@@ -70,9 +85,65 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
      */
     private static final int MSG_UPDATE_TIME = 0;
 
+    private GoogleApiClient mGoogleApiClient;
+    private String highTemperature = "";
+    private String lowTemperature = "";
+    private Drawable weatherDrawable;
+
+
     @Override
     public Engine onCreateEngine() {
         return new Engine();
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        mGoogleApiClient = new GoogleApiClient.Builder(SunshineWatchFaceService.this)
+                .addApi(Wearable.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
+
+        mGoogleApiClient.connect();
+    }
+
+    @Override
+    public void onConnected(@Nullable Bundle bundle) {
+        Wearable.DataApi.addListener(mGoogleApiClient, this);
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {
+
+    }
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+
+    }
+
+    @Override
+    public void onDataChanged(DataEventBuffer dataEventBuffer) {
+        for (DataEvent event : dataEventBuffer) {
+            if (event.getType() == DataEvent.TYPE_CHANGED) {
+                // DataItem changed
+                DataItem item = event.getDataItem();
+                if (item.getUri().getPath().compareTo(WEATHER_ITEM_PATH) == 0) {
+                    DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
+                    highTemperature = String.format(getString(R.string.format_temperature), dataMap.getInt(HIGH_KEY));
+                    lowTemperature = String.format(getString(R.string.format_temperature), dataMap.getInt(LOW_KEY));
+                    weatherDrawable = getResources().getDrawable(getArtResourceIdForWeatherCondition(dataMap.getInt(CONDITION_KEY)), null);
+                }
+            }
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        mGoogleApiClient.disconnect();
+        Wearable.DataApi.removeListener(mGoogleApiClient, this);
     }
 
     private static class EngineHandler extends Handler {
@@ -95,9 +166,7 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
         }
     }
 
-    private class Engine extends CanvasWatchFaceService.Engine implements DataApi.DataListener,
-            GoogleApiClient.ConnectionCallbacks,
-            GoogleApiClient.OnConnectionFailedListener {
+    private class Engine extends CanvasWatchFaceService.Engine {
 
         final Handler mUpdateTimeHandler = new EngineHandler(this);
         boolean mRegisteredTimeZoneReceiver = false;
@@ -127,9 +196,6 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
          */
         boolean mLowBitAmbient;
         private Rect textRect;
-        private Drawable weatherDrawable;
-        private String lowTemp;
-        private String highTemp;
         private Paint mHighTempTextPaint;
         private Paint mLowTempTextPaint;
         private String date;
@@ -142,10 +208,6 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
                     .setAcceptsTapEvents(true)
                     .build());
             Resources resources = SunshineWatchFaceService.this.getResources();
-
-            weatherDrawable = resources.getDrawable(R.drawable.art_clear, null);
-            lowTemp = "20";
-            highTemp = "30";
 
             mYOffset = resources.getDimension(R.dimen.digital_y_offset);
 
@@ -232,22 +294,22 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
             }
 
             if (mAmbient) {
-                mHighTempTextPaint.getTextBounds(highTemp + lowTemp, 0, highTemp.length() + lowTemp.length(), textRect);
+                mHighTempTextPaint.getTextBounds(highTemperature + lowTemperature, 0, highTemperature.length() + lowTemperature.length(), textRect);
             } else {
-                mHighTempTextPaint.getTextBounds(highTemp, 0, highTemp.length(), textRect);
+                mHighTempTextPaint.getTextBounds(highTemperature, 0, highTemperature.length(), textRect);
             }
 
             int highTempXOffset = bounds.width() / 2 - textRect.width() / 2 - textRect.left;
 
-            if (!mAmbient) {
+            if (!mAmbient && weatherDrawable != null) {
                 weatherDrawable.setBounds(highTempXOffset - 65, 0, highTempXOffset - 15, 50);
                 weatherDrawable.draw(canvas);
             }
 
             canvas.translate(0, 40);
 
-            canvas.drawText(highTemp, highTempXOffset, 0, mHighTempTextPaint);
-            canvas.drawText(lowTemp, highTempXOffset + (mAmbient ? textRect.width() / 2 : textRect.width()) + 10, 0, mLowTempTextPaint);
+            canvas.drawText(highTemperature, highTempXOffset, 0, mHighTempTextPaint);
+            canvas.drawText(lowTemperature, highTempXOffset + (mAmbient ? textRect.width() / 2 : textRect.width()) + 10, 0, mLowTempTextPaint);
         }
 
         @Override
@@ -377,25 +439,42 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
                 mUpdateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs);
             }
         }
+    }
 
-        @Override
-        public void onConnected(@Nullable Bundle bundle) {
+    private int getArtResourceIdForWeatherCondition(int weatherId) {
 
+        /*
+         * Based on weather code data for Open Weather Map.
+         */
+        if (weatherId >= 200 && weatherId <= 232) {
+            return R.drawable.art_storm;
+        } else if (weatherId >= 300 && weatherId <= 321) {
+            return R.drawable.art_light_rain;
+        } else if (weatherId >= 500 && weatherId <= 504) {
+            return R.drawable.art_rain;
+        } else if (weatherId == 511) {
+            return R.drawable.art_snow;
+        } else if (weatherId >= 520 && weatherId <= 531) {
+            return R.drawable.art_rain;
+        } else if (weatherId >= 600 && weatherId <= 622) {
+            return R.drawable.art_snow;
+        } else if (weatherId >= 701 && weatherId <= 761) {
+            return R.drawable.art_fog;
+        } else if (weatherId == 761 || weatherId == 771 || weatherId == 781) {
+            return R.drawable.art_storm;
+        } else if (weatherId == 800) {
+            return R.drawable.art_clear;
+        } else if (weatherId == 801) {
+            return R.drawable.art_light_clouds;
+        } else if (weatherId >= 802 && weatherId <= 804) {
+            return R.drawable.art_clouds;
+        } else if (weatherId >= 900 && weatherId <= 906) {
+            return R.drawable.art_storm;
+        } else if (weatherId >= 958 && weatherId <= 962) {
+            return R.drawable.art_storm;
+        } else if (weatherId >= 951 && weatherId <= 957) {
+            return R.drawable.art_clear;
         }
-
-        @Override
-        public void onConnectionSuspended(int i) {
-
-        }
-
-        @Override
-        public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
-
-        }
-
-        @Override
-        public void onDataChanged(DataEventBuffer dataEventBuffer) {
-
-        }
+        return R.drawable.art_storm;
     }
 }

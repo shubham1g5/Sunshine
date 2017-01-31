@@ -18,17 +18,40 @@ package com.example.android.sunshine.sync;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Bundle;
 import android.text.format.DateUtils;
+import android.util.Log;
 
 import com.example.android.sunshine.data.SunshinePreferences;
 import com.example.android.sunshine.data.WeatherContract;
 import com.example.android.sunshine.utilities.NetworkUtils;
 import com.example.android.sunshine.utilities.NotificationUtils;
 import com.example.android.sunshine.utilities.OpenWeatherJsonUtils;
+import com.example.android.sunshine.utilities.SunshineDateUtils;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.wearable.DataMap;
+import com.google.android.gms.wearable.PutDataMapRequest;
+import com.google.android.gms.wearable.PutDataRequest;
+import com.google.android.gms.wearable.Wearable;
 
 import java.net.URL;
 
+import static android.content.ContentValues.TAG;
+import static com.example.android.sunshine.utilities.NotificationUtils.INDEX_MAX_TEMP;
+import static com.example.android.sunshine.utilities.NotificationUtils.INDEX_MIN_TEMP;
+import static com.example.android.sunshine.utilities.NotificationUtils.INDEX_WEATHER_ID;
+import static com.example.android.sunshine.utilities.NotificationUtils.WEATHER_NOTIFICATION_PROJECTION;
+
 public class SunshineSyncTask {
+
+    private static final String WEATHER_ITEM_PATH = "/weather";
+    private static final String HIGH_KEY = "com.example.android.sunshine.high";
+    private static final String LOW_KEY = "com.example.android.sunshine.low";
+    private static final String CONDITION_KEY = "com.example.android.sunshine.condition";
+    private static GoogleApiClient mGoogleApiClient;
 
     /**
      * Performs the network request for updated weather, parses the JSON from that request, and
@@ -46,6 +69,9 @@ public class SunshineSyncTask {
              * weather. It will decide whether to create a URL based off of the latitude and
              * longitude or off of a simple location as a String.
              */
+
+            initGoogleApiClient(context);
+
             URL weatherRequestUrl = NetworkUtils.getUrl(context);
 
             /* Use the URL to retrieve the JSON */
@@ -105,12 +131,80 @@ public class SunshineSyncTask {
                 }
 
             /* If the code reaches this point, we have successfully performed our sync */
+                sendDataToWear(context);
 
             }
 
         } catch (Exception e) {
             /* Server probably invalid */
             e.printStackTrace();
+        }
+    }
+
+    private static void initGoogleApiClient(Context context) {
+        if (mGoogleApiClient == null) {
+            mGoogleApiClient = new GoogleApiClient.Builder(context)
+                    .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
+                        @Override
+                        public void onConnected(Bundle connectionHint) {
+                            Log.d(TAG, "onConnected: " + connectionHint);
+                        }
+
+                        @Override
+                        public void onConnectionSuspended(int cause) {
+                            Log.d(TAG, "onConnectionSuspended: " + cause);
+                        }
+                    })
+                    .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
+                        @Override
+                        public void onConnectionFailed(ConnectionResult result) {
+                            Log.d(TAG, "onConnectionFailed: " + result);
+                        }
+                    })
+                    // Request access only to the Wearable API
+                    .addApi(Wearable.API)
+                    .build();
+        }
+        mGoogleApiClient.connect();
+    }
+
+    private static void sendDataToWear(Context context) {
+        if (mGoogleApiClient.isConnected()) {
+
+            /* Build the URI for today's weather in order to show up to date data in notification */
+            Uri todaysWeatherUri = WeatherContract.WeatherEntry
+                    .buildWeatherUriWithDate(SunshineDateUtils.normalizeDate(System.currentTimeMillis()));
+
+        /*
+         * The MAIN_FORECAST_PROJECTION array passed in as the second parameter is defined in our WeatherContract
+         * class and is used to limit the columns returned in our cursor.
+         */
+            Cursor todayWeatherCursor = context.getContentResolver().query(
+                    todaysWeatherUri,
+                    WEATHER_NOTIFICATION_PROJECTION,
+                    null,
+                    null,
+                    null);
+
+        /*
+         * If todayWeatherCursor is empty, moveToFirst will return false. If our cursor is not
+         * empty, we want to show the notification.
+         */
+            if (todayWeatherCursor.moveToFirst()) {
+
+            /* Weather ID as returned by API, used to identify the icon to be used */
+                int conditionId = todayWeatherCursor.getInt(INDEX_WEATHER_ID);
+                Double high = todayWeatherCursor.getDouble(INDEX_MAX_TEMP);
+                Double low = todayWeatherCursor.getDouble(INDEX_MIN_TEMP);
+
+                PutDataMapRequest putDataMapReq = PutDataMapRequest.create(WEATHER_ITEM_PATH);
+                DataMap dataMap = putDataMapReq.getDataMap();
+                dataMap.putInt(HIGH_KEY, high.intValue());
+                dataMap.putInt(LOW_KEY, low.intValue());
+                dataMap.putInt(CONDITION_KEY, conditionId);
+                PutDataRequest putDataReq = putDataMapReq.asPutDataRequest();
+                Wearable.DataApi.putDataItem(mGoogleApiClient, putDataReq);
+            }
         }
     }
 }

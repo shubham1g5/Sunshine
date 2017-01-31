@@ -1,5 +1,10 @@
-<resources>
+<resources xmlns:xliff="http://schemas.android.com/apk/res-auto">
     <string name="app_name">Sunshine</string>
     <string name="message">Watch face tapped</string>
     <string name="date_display_format">EEE, MMM dd yyyy</string>
+
+    <!-- Temperature format -->
+    <string name="format_temperature">
+        <xliff:g id="temp">%d</xliff:g>\u00B0
+    </string>
 </resources>
