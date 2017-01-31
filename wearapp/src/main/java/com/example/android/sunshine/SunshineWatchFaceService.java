@@ -27,6 +27,7 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
@@ -41,12 +42,16 @@ import android.widget.Toast;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.wearable.DataApi;
 import com.google.android.gms.wearable.DataEvent;
 import com.google.android.gms.wearable.DataEventBuffer;
 import com.google.android.gms.wearable.DataItem;
 import com.google.android.gms.wearable.DataMap;
 import com.google.android.gms.wearable.DataMapItem;
+import com.google.android.gms.wearable.Node;
+import com.google.android.gms.wearable.NodeApi;
+import com.google.android.gms.wearable.PutDataRequest;
 import com.google.android.gms.wearable.Wearable;
 
 import java.lang.ref.WeakReference;
@@ -60,8 +65,6 @@ import java.util.concurrent.TimeUnit;
  * Digital watch face with seconds. In ambient mode, the seconds aren't displayed. On devices with
  * low-bit ambient mode, the text is drawn without anti-aliasing in ambient mode.
  */
-// TODO: 31/1/17 Code cleanup
-// TODO: 31/1/17 Data Integration
 public class SunshineWatchFaceService extends CanvasWatchFaceService implements DataApi.DataListener,
         GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener {
@@ -111,6 +114,57 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService implements 
     @Override
     public void onConnected(@Nullable Bundle bundle) {
         Wearable.DataApi.addListener(mGoogleApiClient, this);
+        getWeatherData();
+    }
+
+
+    /***
+     * Gets the already sent data from the connected  handheld node,
+     * this function assumes that the currently connected handheld device
+     * is the node by which the data was stored initially in the wearable
+     */
+    private void getWeatherData() {
+
+        Wearable.NodeApi.getConnectedNodes(mGoogleApiClient).setResultCallback(new ResultCallback<NodeApi.GetConnectedNodesResult>() {
+            @Override
+            public void onResult(NodeApi.GetConnectedNodesResult nodes) {
+
+                // Handheld device is the last node
+                Node handheldNode = null;
+
+                for (Node node : nodes.getNodes()) {
+                    handheldNode = node;
+                }
+
+                if (handheldNode != null) {
+                    Uri uri = new Uri.Builder()
+                            .scheme(PutDataRequest.WEAR_URI_SCHEME)
+                            .path(WEATHER_ITEM_PATH)
+                            .authority(handheldNode.getId())
+                            .build();
+
+                    Wearable.DataApi.getDataItem(mGoogleApiClient, uri).setResultCallback(
+                            new ResultCallback<DataApi.DataItemResult>() {
+                                @Override
+                                public void onResult(DataApi.DataItemResult dataItemResult) {
+
+                                    if (dataItemResult.getStatus().isSuccess() && dataItemResult.getDataItem() != null) {
+                                        DataMap dataMap = DataMap.fromByteArray(dataItemResult.getDataItem().getData());
+                                        setWeatherDataFromDataMap(dataMap);
+                                    }
+                                }
+                            }
+                    );
+                }
+
+            }
+        });
+    }
+
+    private void setWeatherDataFromDataMap(DataMap dataMap) {
+        highTemperature = String.format(getString(R.string.format_temperature), dataMap.getInt(HIGH_KEY));
+        lowTemperature = String.format(getString(R.string.format_temperature), dataMap.getInt(LOW_KEY));
+        weatherDrawable = getResources().getDrawable(getArtResourceIdForWeatherCondition(dataMap.getInt(CONDITION_KEY)), null);
     }
 
     @Override
@@ -131,9 +185,7 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService implements 
                 DataItem item = event.getDataItem();
                 if (item.getUri().getPath().compareTo(WEATHER_ITEM_PATH) == 0) {
                     DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
-                    highTemperature = String.format(getString(R.string.format_temperature), dataMap.getInt(HIGH_KEY));
-                    lowTemperature = String.format(getString(R.string.format_temperature), dataMap.getInt(LOW_KEY));
-                    weatherDrawable = getResources().getDrawable(getArtResourceIdForWeatherCondition(dataMap.getInt(CONDITION_KEY)), null);
+                    setWeatherDataFromDataMap(dataMap);
                 }
             }
         }
@@ -385,28 +437,6 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService implements 
             updateTimer();
         }
 
-        /**
-         * Captures tap event (and tap type) and toggles the background color if the user finishes
-         * a tap.
-         */
-        @Override
-        public void onTapCommand(int tapType, int x, int y, long eventTime) {
-            switch (tapType) {
-                case TAP_TYPE_TOUCH:
-                    // The user has started touching the screen.
-                    break;
-                case TAP_TYPE_TOUCH_CANCEL:
-                    // The user has started a different gesture or otherwise cancelled the tap.
-                    break;
-                case TAP_TYPE_TAP:
-                    // The user has completed the tap gesture.
-                    // TODO: Add code to handle the tap gesture.
-                    Toast.makeText(getApplicationContext(), R.string.message, Toast.LENGTH_SHORT)
-                            .show();
-                    break;
-            }
-            invalidate();
-        }
 
         /**
          * Starts the {@link #mUpdateTimeHandler} timer if it should be running and isn't currently
